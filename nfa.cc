@@ -1,0 +1,1030 @@
+#include <string>
+#include <iostream>
+#include <stdio.h>
+#include <climits>//CHAR_BITの使用のため
+#include <vector>//vectorの使用のため
+#include <algorithm>
+using namespace std;
+
+/*
+ NFA state : 非決定性有限オートマトンの各要素、一つの状態を表している
+*/
+class NFAState
+{
+  // 文字数の定義
+  // 文字のパターンが256個ある(改行やタブをなども含まれている)
+  static const size_t CHARA_SIZE = 256;
+  // 文字パターン charaMask_ の要素数
+  static const size_t MASK_SIZE = 
+    CHARA_SIZE / CHAR_BIT + ( ( CHARA_SIZE % CHAR_BIT != 0 ) ? 1 : 0 );//<条件式>?<真式>:<偽式>
+
+  // 遷移先への相対位に対する型
+  //typedef 型名 識別子; 独自の型名を付けることが出来る
+  typedef vector<NFAState>::difference_type difference_type;
+
+  vector<unsigned char> charaMask_; // 遷移できる文字パターン
+   
+ public:
+
+  /*
+    公開メンバ変数群
+  */
+
+  bool isEmpty;          // 空文字か ?
+
+  difference_type next0; // 一つ目の遷移先
+  difference_type next1; // 二つ目の遷移先
+  vector<NFAState> NFA_transMask;//nfa 遷移情報をvecotrに
+  /*
+    公開メンバ関数群
+  */
+
+  // コンストラクタ：初期化している
+  NFAState()
+    : charaMask_( MASK_SIZE, 0 ), isEmpty( true ), next0( 0 ), next1( 0 ) {}
+
+  // clearMask : 文字パターンのビットクリア
+  void clearMask()
+  {
+    for ( vector<unsigned char>::size_type i = 0 ;
+          i < MASK_SIZE ; ++i )
+      charaMask_[i] = 0;
+  }
+
+  // fillMask : 文字パターンのビットフィル
+  void fillMask()
+  {
+    for ( vector<unsigned char>::size_type i = 0 ;
+          i < MASK_SIZE ; ++i )
+      charaMask_[i] = ~0;
+  }
+
+  // reverseMask : 文字パターンのビット反転
+  void reverseMask()
+  {
+    for ( vector<unsigned char>::size_type i = 0 ;
+          i < MASK_SIZE ; ++i )
+      charaMask_[i] = ~( charaMask_[i] );
+  }
+
+  // setMask : 文字コードに対応する文字パターンのビットを立てる
+  // 遷移する文字を決める。"a","b"など
+  void setMask( unsigned char c )
+  {
+    size_t index = c / CHAR_BIT;
+    unsigned int maskNum = c % CHAR_BIT;
+
+    charaMask_[index] |= 1 << maskNum;
+  }
+
+  // checkChara : 文字照合ルーチン
+  // setMaskで設定した文字がっているかをチェックする。
+  bool checkChara( unsigned char c ) const
+  {
+    size_t index = c / CHAR_BIT;
+    unsigned int maskNum = c % CHAR_BIT;
+
+    return( ( ( charaMask_[index] ) & ( 1 << maskNum ) ) != 0 );
+  }
+  
+  void print() const;
+};
+/*
+  ATOM : メタ文字の定義
+*/
+namespace ATOM
+{
+  static const char REPEAT0         = '*';  // 0 回以上の繰り返し
+  static const char REPEAT1         = '+';  // 1 回以上の繰り返し
+  static const char REPEAT01        = '\?'; // 0 または 1 回
+
+  static const char HEADOFPAT       = '^';  // 行頭
+  static const char ENDOFPAT        = '$';  // 行末
+
+  static const char CHARA_ANY       = '.';  // 任意の一文字
+  static const char QUOTE           = '\\'; // クォート(エスケープ・シーケンス)
+
+  static const char GROUP_START     = '(';  // グループの開始
+  static const char GROUP_END       = ')';  // グループの終了
+
+  static const char OR              = '|';  // 論理和
+
+  static const char CLASS_START     = '[';  // ブラケット表現の開始
+  static const char CLASS_END       = ']';  // ブラケット表現の終了
+  static const char CLASS_REVERSE   = '^';  // ブラケット表現の反転
+  static const char CLASS_SEQUENCE  = '-';  // ブラケット表現の文字範囲
+};
+
+
+  /*
+    Regex : 正規表現のコンパイルと検索
+  */
+  class Regex
+  {
+  // 型の定義
+    typedef string::const_iterator StrCit;
+    typedef vector<NFAState>::iterator NFAIt;
+    typedef vector<NFAState>::const_iterator NFACit;
+    typedef vector<NFAState>::size_type size_type;
+    typedef vector<NFAState>::difference_type difference_type;
+
+    vector<NFAState> vecNFA_; // 非決定性オートマトン(全ての状態を持つ完成したもの)
+    bool startFlg_;           // 開始文字 (^) が先頭に指定されていたか
+    bool endFlg_;             // 終了文字 ($) が末尾に指定されていたか
+
+    bool NFA_Quote( unsigned char c );    // エスケープ系列用 NFAState 作成
+    void NFA_Chara( unsigned char c );    // 文字コード用 NFAState 作成
+    void NFA_SelftransChara( unsigned char c );    // nfa用 
+    void NFA_SelftransChara1( unsigned char c );    // nfa用
+    bool NFA_Class( StrCit s, StrCit e ); // ブラケット表現用 NFAState 作成
+
+    bool NFA_LEOneRepeater( size_type headIdx );  // 0, 1 回の繰り返し用 NFAState 作成
+    bool NFA_GEOneRepeater( size_type headIdx );  // 1 回以上の繰り返し用 NFAState 作成
+    bool NFA_GEZeroRepeater( size_type headIdx ); // 0 回以上の繰り返し用 NFAState 作成
+
+    void NFA_Or( size_type idx0, size_type idx1 ); // 論理和用 NFAState 作成
+
+    bool compileBranch( StrCit s, StrCit e ); // 枝の構文解析 "()","{}"の処理を行い、状態を作る
+    bool compile( StrCit s, StrCit e );       // 構文解析ルーチン"()","{}"があるかの探索を行う
+   /*
+    Regex::regexSub : 正規表現によるパターン照合(メイン・ルーチン)
+  
+    StrCit s : 照合開始位置
+    StrCit e : 照合終了位置の次
+  
+    戻り値 : 一致範囲の次の位置
+  */
+  StrCit regexSub( StrCit s, StrCit e ) const
+  {
+    vector<NFACit> buffer[2]; // バッファ(切り替えのため二つ準備)
+    StrCit matched = s;       // 一致範囲の次の位置
+    int sw = 0;             // buffer の切り替えフラグ
+  
+    buffer[sw].push_back( vecNFA_.begin() );
+  
+    for ( ; s <= e ; ++s ) {
+      for ( vector<NFACit>::size_type i = 0 ; i < buffer[sw].size() ; ++i ) {
+        NFACit nfa = buffer[sw][i];
+        // 終点に達したら一致範囲末尾の次のポインタを登録
+        if ( nfa->next0 == 0 && nfa->next1 == 0 ) {
+          matched = s;
+        // 空文字遷移の場合は同じバッファに登録する
+        } else if ( nfa->isEmpty ) {
+          if ( nfa->next0 != 0 )
+            addBuffer( buffer[sw], nfa + nfa->next0 );
+          if ( nfa->next1 != 0 )
+            addBuffer( buffer[sw], nfa + nfa->next1 );
+        // 文字パターンがマッチしたら,もう一方のバッファに次の状態を登録
+        } else if ( s < e && nfa->checkChara( *s ) ) {
+          addBuff/*
+    Regex::regexSub : 正規表現によるパターン照合(メイン・ルーチン)
+  
+    StrCit s : 照合開始位置
+    StrCit e : 照合終了位置の次
+  
+    戻り値 : 一致範囲の次の位置
+  */
+  StrCit regexSub( StrCit s, StrCit e ) const
+  {
+    vector<NFACit> buffer[2]; // バッファ(切り替えのため二つ準備)
+    StrCit matched = s;       // 一致範囲の次の位置
+    int sw = 0;             // buffer の切り替えフラグ
+  
+    buffer[sw].push_back( vecNFA_.begin() );
+  
+    for ( ; s <= e ; ++s ) {
+      for ( vector<NFACit>::size_type i = 0 ; i < buffer[sw].size() ; ++i ) {
+        NFACit nfa = buffer[sw][i];
+        // 終点に達したら一致範囲末尾の次のポインタを登録
+        if ( nfa->next0 == 0 && nfa->next1 == 0 ) {
+          matched = s;
+        // 空文字遷移の場合は同じバッファに登録する
+        } else if ( nfa->isEmpty ) {
+          if ( nfa->next0 != 0 )
+            addBuffer( buffer[sw], nfa + nfa->next0 );
+          if ( nfa->next1 != 0 )
+            addBuffer( buffer[sw], nfa + nfa->next1 );
+        // 文字パターンがマッチしたら,もう一方のバッファに次の状態を登録
+        } else if ( s < e && nfa->checkChara( *s ) ) {
+          addBuffer( buffer[sw^1], nfa + nfa->next0 );
+        }
+      }
+      buffer[sw].clear();
+      sw ^= 1; // バッファの切り替え
+      if ( buffer[sw].empty() ) break; // 次のバッファが空なら終了
+    }
+  
+    return( matched );
+  }
+  bool regex( StrCit& s, StrCit& e ) const; // 文字列検索(開始位置を移動しながら regSub を呼び出す)
+
+  static void addBuffer( vector<NFACit>& vecBuffer, NFACit nfa ); // バッファへの追加(regexSub用)
+
+  /*
+    FindGroupEnd : グループ化(...)の終端を見つける
+  
+    StrCit s : グループの開始 '(' がある個所
+    StrCit e : 探索範囲の終端の次
+
+    戻り値 : グループの終了 ')' が見つかった個所
+            見つからなかった場合は e が返される
+  */
+  StrCit FindGroupEnd( StrCit s, StrCit e ){
+    int gCnt = 0; // グループが入れ子の場合、その数
+
+    StrCit p = s; // 終端を取り出すイテレータ
+    for ( ; p != e ; ++p ) {
+      if ( *p == ATOM::GROUP_END )
+        if ( --gCnt == 0 ) break;
+      if ( *p == ATOM::GROUP_START )
+        ++gCnt;
+    }
+
+    // 終端まで ')' が見つからなかった
+    if ( p == e )
+      cerr << "Unterminated group found." << endl;
+
+    return( p );
+  }
+
+  /*
+    FindClassEnd : ブラケット表現[...]の終端を見つける
+
+    StrCit s : ブラケット表現の開始 '[' がある個所
+    StrCit e : 探索範囲の終端の次
+
+    戻り値 : ブラケット表現の終了 ']' が見つかった個所
+            見つからなかった場合は e が返される
+  */
+  StrCit FindClassEnd( StrCit s, StrCit e )
+  {
+    StrCit p = s; // 終端を取り出すイテレータ
+
+    while ( p != e && *p != ATOM::CLASS_END )
+      ++p;
+
+    // 先頭に ']' ( または '^]' ) があった場合は再探索
+    if ( p != e ) {
+      if ( p == s + 1 ||                                       // '[' の次に ']' ( ブラケットの先頭が ']' )
+           ( p == s + 2 && *( s + 1 ) == ATOM::CLASS_REVERSE ) // ブラケットの先頭が '^]'
+           )
+        for ( ++p ; p != e && *p != ATOM::CLASS_END ; ++p );
+    }
+
+    // 終端まで ']' が見つからなかった
+    if ( p == e )
+      cerr << "Unterminated bracket found." << endl;
+
+    return( p );
+  }
+
+ public:
+
+  // コンストラクタ
+  Regex() : startFlg_( false ), endFlg_( false ) {}
+
+  bool compile( const string& pattern ); // コンパイル処理
+
+  bool regex( const string& str, StrCit& s, StrCit& e ) const; // 文字列検索
+
+  void print() const;
+
+};
+
+/*
+  Regex::compile : 構文解析ルーチン
+
+  StrCit s : 構文の先頭
+  StrCit e : 構文の末尾の次
+
+  戻り値 : true ... 正常終了
+           false ... 各文節の処理に失敗
+*/
+bool Regex::compile( StrCit s, StrCit e )
+{
+  size_type nfa0 = vecNFA_.size() - 1; // グループの先頭
+  size_type nfa1 = 0;                  // グループの先頭(論理和で利用)
+  
+  //一文字ずつ解析を行う
+  for ( StrCit p = s ; p != e ; ++p ) {
+    switch ( *p ) {
+    case ATOM::QUOTE:
+      // 末尾が '\' の場合は false を返す
+      if ( ++p == e ) {
+        cerr << "\\ can't be the last character of regex pattern." << endl;
+        return( false );
+      }
+      break;
+    case ATOM::OR:
+      if ( ! compileBranch( s, p ) ) return( false );
+      if ( ( s = p + 1 ) >= e ) return( true ); // 末尾に'|'があった場合は無視
+      if ( nfa1 != 0 ) NFA_Or( nfa0, nfa1 );
+      nfa1 = vecNFA_.size() - 1;
+      break;
+    case ATOM::GROUP_START:
+      // グループは compileBranch で処理するのでスキップ
+      p = FindGroupEnd( p, e );
+      if ( p == e ) return( false );
+    }
+  }
+  if ( ! compileBranch( s, e ) ) return( false );
+  if ( nfa1 != 0 ) NFA_Or( nfa0, nfa1 );
+
+  //一番最後の状態
+  vecNFA_.back().clearMask();
+  vecNFA_.back().next0 = 0;
+  vecNFA_.back().next1 = 0;
+
+  return( true );
+}
+
+/*
+  Regex::compile : 構文解析ルーチン
+
+  const string& pattern : 正規表現
+
+  戻り値 : true ... 正常終了
+           false ... 各文節の処理に失敗
+*/
+bool Regex::compile( const string& pattern )
+{
+  vecNFA_.clear();//初期化
+  vecNFA_.push_back( NFAState() );//コンストラクタを呼ぶ
+
+  StrCit s = pattern.begin(); // pattern の開始
+  StrCit e = pattern.end();   // pattern の末尾の次
+
+  // 先頭に ^ があれば startFlg_ = true にしてスキップ
+  if ( *s == ATOM::HEADOFPAT ) {
+    ++s;
+    startFlg_ = true;
+  }
+
+  // 末尾に $ があれば endFlg_ = true にしてスキップ
+  if ( *( e - 1 ) == ATOM::ENDOFPAT ) {
+    --e;
+    endFlg_ = true;
+  }
+
+  return( compile( s, e ) );
+}
+
+/*
+  Regex::NFA_Or : 論理和用 NFAState 作成
+
+  size_type idx0, idx1 : 二つの枝の先頭
+
+  idx0       idx1
+ (grp0 ... ) (grp1 ...) (empty)
+  v
+
+           idx0                  idx1
+  |--------v---------------------v      |---v      |---v
+ <branch> (grp0 ...) <grp0_end> (grp1 ...) (grp1_end) <empty>
+                  |---^      |-------------------------^
+*/
+void Regex::NFA_Or( size_type idx0, size_type idx1 )
+{
+  
+  // grp1 の先頭に grp0 の末尾を追加
+  //vecNFA_.insert( vecNFA_.begin() + idx1, 1, NFAState() );
+  // grp0 の先頭に空分岐のための NFAState を挿入
+  //vecNFA_.insert( vecNFA_.begin() + idx0, 1, NFAState() );
+
+  size_type branch = idx0;     // 先頭の空分岐
+
+  ++idx0;    // idx0 の補正
+  idx1 += 2; // idx1 の補正
+
+  // 先頭の空分岐に分岐先を代入
+  //vecNFA_[branch].clearMask();
+  vecNFA_[branch].next0 = 1;
+  vecNFA_[branch].next1 = idx1 - branch - 1;
+/*
+  // 二つの枝の末尾の分岐先を最後の空分岐に
+  vecNFA_[idx1 - 1].clearMask();
+  vecNFA_[idx1 - 1].next0 = vecNFA_.size() - ( idx1 - 1 );
+  vecNFA_[idx1 - 1].next1 = 0;
+  vecNFA_[vecNFA_.size() - 1].clearMask();
+  vecNFA_[vecNFA_.size() - 1].next0 = 1;
+  vecNFA_[vecNFA_.size() - 1].next1 = 0;
+*/
+  // 次の要素を用意しておく
+  //vecNFA_.push_back( NFAState() );
+
+  return;
+}
+
+
+/*
+  Regex::compileBranch : 枝の構文解析
+
+  StrCit s : 枝の先頭
+  StrCit e : 枝の末尾の次
+
+  戻り値 : true ... 正常終了
+          false ... 各文節の処理に失敗, '\' が末尾にあった
+*/
+bool Regex::compileBranch( StrCit s, StrCit e )
+{
+  size_type headIdx = vecNFA_.size() - 1;//グループの先頭
+  StrCit p1;                              // 文字列探索用ポインタ
+
+  const string anyChara = "^\n"; // 前キャラクタ (\nを除く)
+
+  for ( StrCit p0 = s ; p0 != e ; ++p0 ) {
+    switch ( *p0 ) {
+    case ATOM::CHARA_ANY:
+      headIdx = vecNFA_.size() - 1;
+      if ( ! NFA_Class( anyChara.begin(), anyChara.end() ) ) return( false );
+      break;
+    case ATOM::REPEAT0:
+      /*NFA_SelftransChara(*(p0 - 1));//nfa
+      if ( ! NFA_GEZeroRepeater( headIdx ) ) return( false );
+      headIdx = vecNFA_.size() - 1;
+      */
+      break;
+    case ATOM::REPEAT1:
+     /* NFA_SelftransChara(*(p0 - 1));//nfa
+      if ( ! NFA_GEOneRepeater( headIdx ) ) return( false );
+      headIdx = vecNFA_.size() - 1;
+     */
+      break;
+    case ATOM::REPEAT01:
+      /*if ( ! NFA_LEOneRepeater( headIdx ) ) return( false );
+      headIdx = vecNFA_.size() - 1;
+      */
+      break;
+    case ATOM::GROUP_START:
+      // グループの終端 ')' を探す
+      p1 = FindGroupEnd( p0, e );
+      if ( p1 == e ) return( false );
+      headIdx = vecNFA_.size() - 1;
+      if ( ! compile( p0 + 1, p1 ) ) return( false );
+      p0 = p1;
+      break;
+    case ATOM::CLASS_START:
+      // ブラケット表現の終端 ']' を探す
+      p1 = FindClassEnd( p0, e );
+      if ( p1 == e ) return( false );
+      headIdx = vecNFA_.size() - 1;
+      if ( ! NFA_Class( p0 + 1, p1 ) ) return( false );
+      p0 = p1;
+      break;
+    case ATOM::QUOTE:
+      // 末尾が '\' の場合は false を返す
+      if ( ++p0 == e ) {
+        cerr << "\\ can't be the last character of regex pattern." << endl;
+        return( false );
+      }
+      headIdx = vecNFA_.size() - 1;
+      NFA_Quote( *p0 );
+      break;
+    default://すべてのcase文に合わない場合
+      if( *(p0+1) == ATOM::REPEAT0){
+          if( *(p0+2) != (ATOM::REPEAT0 && ATOM::REPEAT1 && ATOM::REPEAT01 && ATOM::QUOTE && ATOM::CLASS_START && ATOM::GROUP_START) && (p0+2) != e ){
+              NFA_SelftransChara1( *p0 );
+              if ( ! NFA_GEZeroRepeater( headIdx ) ) return( false );
+              headIdx = vecNFA_.size() - 1;
+              break;
+          }else if((p0+2) == e){
+              NFA_SelftransChara( *p0 );
+              if ( ! NFA_GEZeroRepeater( headIdx ) ) return( false );
+              headIdx = vecNFA_.size() - 1;
+              break;
+          }
+      } else if( *(p0+1) == ATOM::REPEAT1){
+            if( *(p0+2) != (ATOM::REPEAT0 && ATOM::REPEAT1 && ATOM::REPEAT01 && ATOM::QUOTE && ATOM::CLASS_START && ATOM::GROUP_START) && (p0+2) != e ){
+               NFA_SelftransChara1( *p0 );
+               if ( ! NFA_GEOneRepeater( headIdx ) ) return( false );
+               headIdx = vecNFA_.size() - 1;
+               break;
+          } else if((p0+2) == e){
+              NFA_SelftransChara1( *p0 );
+              if ( ! NFA_GEOneRepeater( headIdx ) ) return( false );
+              headIdx = vecNFA_.size() - 1;
+              break;
+            }
+      } else if( *(p0+1) == ATOM::REPEAT01){
+          NFA_Chara( *p0 );
+          if ( ! NFA_LEOneRepeater( headIdx ) ) return( false );
+          headIdx = vecNFA_.size() - 1;
+          break;
+      } else if( *(p0+1) != (ATOM::REPEAT0 && ATOM::REPEAT1 && ATOM::REPEAT01 && ATOM::QUOTE && ATOM::CLASS_START && ATOM::GROUP_START)){
+          headIdx = vecNFA_.size() - 1;
+          NFA_Chara( *p0 );
+          break;
+      }
+    }
+  }
+
+  return( true );
+}
+/*
+  エスケープ・キャラクタの定義
+*/
+struct ESCAPE_CHARA {
+  char meta_chara;   // メタキャラクタ
+  string mask_chara; // 対象文字
+} escape_chara[] = {
+  { 'd', "0-9", },         // 数値
+  { 'D', "^0-9", },        // 数値以外
+  { 'w', "a-zA-Z0-9", },   // 英数字
+  { 'W', "^a-zA-Z0-9", },  // 英数字以外
+  { 's', " \t\f\r\n", },   // 空白文字
+  { 'S', "^ \t\f\r\n", },  // 空白文字以外
+  { 'h', " \t", },         // 水平空白文字
+  { 'H', "^ \t", },        // 水平空白文字以外
+  { 'v', "\n\v\f\r", },  // 垂直空白文字
+  { 'V', "^\n\v\f\r", }, // 垂直空白文字以外
+
+  { 'a', "\a", }, // アラーム(BEL=0x07)
+  { 'b', "\b", }, // バック・スペース(BS=0x08)
+  { 't', "\t", }, // 水平タブ(HT=0x09)
+  { 'n', "\n", }, // 改行(LF=0x0A)
+  { 'v', "\v", }, // 垂直タブ(VT=0x0B)
+  { 'f', "\f", }, // 書式送り(FF=0x0C)
+  { 'r', "\r", }, // 復帰(CR=0x0D)
+  { 0, "", },
+};
+
+
+/*
+  Regex::NFA_Quote : エスケープ系列用 NFAState 作成
+
+  unsigned char c : エスケープ・シーケンス内の文字
+
+  戻り値 : 常に true
+*/
+bool Regex::NFA_Quote( unsigned char c )
+{
+  // エスケープ系列に該当するか
+  for ( struct ESCAPE_CHARA* esc = escape_chara ; esc->meta_chara != 0 ; ++esc )
+    if ( esc->meta_chara == c )
+      return( NFA_Class( ( esc->mask_chara ).begin(), ( esc->mask_chara ).end() ) );
+
+  // 該当なしの場合はキャラクタをそのまま処理
+  NFA_Chara( c );
+
+  return( true );
+}
+
+/*
+  Regex::NFA_Class : ブラケット表現用 NFAState 作成
+
+  StrCit s : ブラケット内部の開始 ( '[' の次 )
+  StrCit e : ブラケット終端 ( ']' のある個所 )
+
+  戻り値 : true ... 正常終了 false ... 文字範囲の指定が不正
+
+  (empty)
+   v
+
+   |------v
+  (back) <empty>
+    ->set flag
+*/
+bool Regex::NFA_Class( StrCit s, StrCit e )
+{
+  // 末尾の要素を初期化
+  NFAState& back = vecNFA_.back();
+  back.clearMask();
+
+  // '^' が指定されているかチェック
+  bool revFlg = false;
+  if ( *s == ATOM::CLASS_REVERSE ) {
+    revFlg = true;
+    ++s;
+  }
+
+  for ( StrCit p = s ; p != e ; ++p ) {
+    // 照合順序の処理
+    if ( p > s && ( p + 1 ) < e && *p == ATOM::CLASS_SEQUENCE ) {
+      // 'x-y-z'のチェック
+      if ( ( p + 3 ) < e && *( p + 2 ) == ATOM::CLASS_SEQUENCE ) {
+        cerr << "Illegal range format in bracket (x-y-z)." << endl;
+        return( false );
+      }
+      // 順序が逆ならエラー
+      if ( *( p - 1 ) > *( p + 1 ) ) {
+        cerr << "Reverse sequence found in bracket (y-x)." << endl;
+        return( false );
+      }
+      for ( char c = *( p - 1 ) + 1 ; c <= *( p + 1 ) ; ++c )
+        back.setMask( c );
+      ++p;
+    } else {
+      back.setMask( *p );
+    }
+  
+  if ( revFlg ) back.reverseMask();
+
+  // 左のみ次の要素に接続
+  back.next0 = 1;
+  back.next1 = 0;
+  back.isEmpty = false;
+
+  // 次の要素を用意しておく
+  vecNFA_.push_back( NFAState() );
+
+  return( true );
+}
+
+/*
+  Regex::NFA_Chara : 文字コード用 NFAState 作成
+
+  char c : 登録する文字コード
+
+  (empty)
+   v
+
+   |------v
+  (back) <empty>
+    ->c
+*/
+void Regex::NFA_Chara( unsigned char c )
+{
+  NFAState nfa;
+  NFAIt back = vecNFA_.end() - 1;
+  back->setMask( c );
+  back->next0 = 1;
+  back->next1 = 0;
+  back->isEmpty = false;
+
+  // 次の要素を用意しておく
+  vecNFA_.push_back( NFAState() );
+
+  return;
+}
+
+//nfa
+void Regex::NFA_SelftransChara( unsigned char c )
+{
+  NFAIt back1 = vecNFA_.end() -1;
+  //back->clearMask();
+  back1->setMask( c );
+  back1->next0 = '*';
+  back1->next1 = 0;
+  back1->isEmpty = false;
+
+  // 次の要素を用意しておく
+  vecNFA_.push_back( NFAState() );
+  
+
+  return;
+}
+void Regex::NFA_SelftransChara1( unsigned char c )
+{
+  NFAIt back2 = vecNFA_.end() - 1;
+  //back->clearMask();
+  back2->setMask( c );
+  back2->next0 = '*';
+  back2->next1 = 1;
+  back2->isEmpty = false;
+
+  // 次の要素を用意しておく
+  vecNFA_.push_back( NFAState() );
+
+  return;
+}
+/*
+  Regex::NFA_LEOneRepeater : 0,1 回の繰り返し用 NFAState 作成
+
+  size_type headIdx : 枝の先頭
+
+  戻り値 : true ... 正常終了 false ... 繰り返し対象がない
+
+       headIdx
+      (grp...) (empty)
+       v
+
+       headIdx +1       +n+1
+          |----v--------v
+         <b0> (grp...) (empty)
+*/
+bool Regex::NFA_LEOneRepeater( size_type headIdx )
+{
+  // 繰り返し対象がない場合は false を返す
+  if ( headIdx + 1 == vecNFA_.size() ) {
+    cerr << "No group of repeat found." << endl;
+    return( false );
+  }
+
+  //nfa
+
+  /*
+  // 繰り返し対象の大きさ
+  difference_type n = vecNFA_.size() - headIdx - 1;
+  
+
+  // 先頭に b0 を挿入
+  vecNFA_.insert( vecNFA_.begin() + headIdx, 1, NFAState() );
+
+  // b0 の初期化
+  NFAIt b0 = vecNFA_.begin() + headIdx;
+  b0->clearMask();
+  b0->next0 = 1;
+  //b0->next1 = 0;
+  b0->next1 = n + 1;
+*/
+
+  return( true );
+}
+
+/*
+  Regex::NFA_GEOneRepeater : 1 回以上の繰り返し用 NFAState 作成
+
+  size_type headIdx : 枝の先頭
+
+  戻り値 : true ... 正常終了 false ... 繰り返し対象がない
+
+       headIdx
+      (grp...) (empty)
+       v
+
+       headIdx  +n   +n+1
+       v--------|----v
+      (grp...) <b0> <empty>
+*/
+bool Regex::NFA_GEOneRepeater( size_type headIdx )
+{
+  // 繰り返し対象がない場合は false を返す
+  if ( headIdx + 1 == vecNFA_.size() ) {
+    cerr << "No group of repeat found." << endl;
+    return( false );
+  }
+/*
+  // 繰り返し対象の大きさ
+  difference_type n = vecNFA_.size() - headIdx - 1;
+
+  // b0 の初期化
+  NFAIt b0 = vecNFA_.end() - 1;
+  b0->clearMask();
+  b0->next0 = -n;
+  b0->next1 = 1;
+
+  // 次の要素を用意しておく
+  //vecNFA_.push_back( NFAState() );
+*/
+  return( true );
+}
+
+/*
+  Regex::NFA_GEZeroRepeater : 0 回以上の繰り返し用 NFAState 作成
+
+  size_type headIdx : 枝の先頭
+
+  戻り値 : true ... 正常終了 false ... 繰り返し対象がない
+
+       headIdx
+      (grp...) (empty)
+       v
+
+      headIdx +1       +n+1 +n+2
+       |------v-------------v
+      <b0>   (grp...) (b1) <empty>
+              ^--------|----^
+*/
+bool Regex::NFA_GEZeroRepeater( size_type headIdx )
+{
+  // 繰り返し対象がない場合は false を返す
+  if ( headIdx + 1 == vecNFA_.size() ) {
+    cerr << "No group of repeat found." << endl;
+    return( false );
+  }
+  //nfa
+  /*
+  // 繰り返し対象の大きさ
+  difference_type n = vecNFA_.size() - headIdx - 1;
+
+  // 先頭に b0 を挿入
+  vecNFA_.insert( vecNFA_.begin() + headIdx, 1, NFAState() );
+
+  // b0 の初期化
+  NFAIt b0 = vecNFA_.begin() + headIdx;
+  b0->clearMask();
+  b0->next0 = 1;
+  b0->next1 = n + 2;
+
+  // b1 の初期化
+  NFAIt b1 = vecNFA_.end() - 1;
+  b1->clearMask();
+  b1->next0 = -n;
+  b1->next1 = 1;
+
+  // 次の要素を用意しておく
+  vecNFA_.push_back( NFAState() );
+  */
+  return( true );
+}
+/*
+  NFA_Print : NFAState マスクパターンの出力 (一文字出力)
+
+  const vector<unsigned char>& charaMask : マスクパターン
+  size_t index : ビット位置
+  const string& format : 出力フォーマット
+*/
+void NFA_Print( const vector<unsigned char>& charaMask, size_t index, const string& format )
+{
+  vector<unsigned char>::size_type vecIdx = index / CHAR_BIT;
+  vector<unsigned char>::size_type maskIdx = index % CHAR_BIT;
+
+  if ( ( ( charaMask[vecIdx] >> maskIdx ) & 1 ) != 0 )
+    printf( format.c_str(), index );
+}
+
+/*
+  NFA_Print : NFAState マスクパターンの出力 (範囲指定時の一文字出力)
+
+  const vector<unsigned char>& charaMask : マスクパターン
+  size_t index : ビット位置
+  const string& format : 出力フォーマット
+  int bitOnIdx : 前にビットが立っていた位置
+
+  戻り値 : 更新した bitOnIdx
+*/
+int NFA_Print( const vector<unsigned char>& charaMask, size_t index, const string& format, int bitOnIdx )
+{
+  vector<unsigned char>::size_type vecIdx = index / CHAR_BIT;
+  vector<unsigned char>::size_type maskIdx = index % CHAR_BIT;
+
+  if ( ( ( charaMask[vecIdx] >> maskIdx ) & 1 ) != 0 ) {
+    if ( bitOnIdx < 0 ) {
+      printf( format.c_str(), index );
+      bitOnIdx = index;
+    }
+    return( bitOnIdx );
+  } else {
+    if ( bitOnIdx >= 0 ) {
+      if ( (size_t)( bitOnIdx + 1 ) < index ) printf( ( "-" + format + " " ).c_str(), index - 1 );
+    }
+    return( -1 );
+  }
+}
+
+/*
+  NFA_Print : NFAState マスクパターンの出力 (範囲出力)
+
+  const vector<unsigned char>& charaMask : マスクパターン
+  size_t s : 開始ビット位置
+  size_t e : 終了ビット位置の次
+  const string& format : 出力フォーマット
+*/
+void NFA_Print( const vector<unsigned char>& charaMask, size_t s, size_t e, const string& format )
+{
+  int bitOnIdx = -1;
+
+  for ( size_t i = s ; i < e ; ++i )
+    bitOnIdx = NFA_Print( charaMask, i, format, bitOnIdx );
+
+  if ( bitOnIdx >= 0 && (size_t)( bitOnIdx + 1 ) < e )
+    printf( ( "-" + format ).c_str(), e - 1 );
+}
+
+/*
+  NFAState::print : NFAState のマスクパターンを表示する
+*/
+void NFAState::print() const{
+  if ( isEmpty ) return;
+
+  NFA_Print( charaMask_, 0, '\a', "0x%02X" ); // control code 0x00-0x08
+
+  NFA_Print( charaMask_, '\a', "\\a" ); // BEL
+  NFA_Print( charaMask_, '\b', "\\b" ); // BS
+  NFA_Print( charaMask_, '\t', "\\t" ); // HT
+  NFA_Print( charaMask_, '\n', "\\n" ); // LF
+  NFA_Print( charaMask_, '\v', "\\v" ); // VT
+  NFA_Print( charaMask_, '\f', "\\f" ); // FF
+  NFA_Print( charaMask_, '\r', "\\r" ); // CR
+
+  NFA_Print( charaMask_, 0x0E, ' ', "0x%02X" ); // control code 0x0E-0x1F
+
+  NFA_Print( charaMask_, ' ', "(SPACE)" ); // SPACE
+
+  for ( unsigned char c = '!' ; c < '0' ; ++c )
+    NFA_Print( charaMask_, c, "%c" ); // 0x21-0x2F
+
+  NFA_Print( charaMask_, '0', ':', "%c" ); // 数値
+
+  for ( unsigned char c = ':' ; c < 'A' ; ++c )
+    NFA_Print( charaMask_, c, "%c" ); // 0x3A-0x40
+
+  NFA_Print( charaMask_, 'A', '[', "%c" ); // 英大文字
+
+  for ( unsigned char c = '[' ; c < 'a' ; ++c )
+    NFA_Print( charaMask_, c, "%c" ); // 0x5B-0x60
+
+  NFA_Print( charaMask_, 'a', '{', "%c" ); // 英小文字
+
+  for ( unsigned char c = '{' ; c < 0x7F ; ++c )
+    NFA_Print( charaMask_, c, "%c" ); // 0x7B-0x7E
+
+  NFA_Print( charaMask_, 0x7F, "(DEL)" ); // DEL
+
+  NFA_Print( charaMask_, 0x80, 0x100, "0x%02X" ); // control code 0x80-0xFF
+}
+
+/*
+  Regex::print : NFA の表示ルーチン
+*/
+void Regex::print() const
+{
+  for ( size_type st = 0 ; st < vecNFA_.size() ; ++st ) {
+    printf( "%.3u : mask=", (unsigned int)st );
+    vecNFA_[st].print();
+    cout << " next0=";
+    if ( vecNFA_[st].next0 != '*' && vecNFA_[st].next0 != 0 )
+      cout << st + vecNFA_[st].next0;
+    else if(vecNFA_[st].next0 == '*')
+      cout << "Self";
+    else
+      cout << "NULL";
+    cout << " next1=";
+    if ( vecNFA_[st].next1 != 0 )
+      cout << st + vecNFA_[st].next1;
+    else
+      cout << "NULL";
+    
+    cout << endl;
+  }
+}
+
+/*
+  Regex::addBuffer : バッファへの登録(重複チェック付き)
+
+  vector<NFACit>& vecBuffer : 対象のバッファ
+  NFACit nfa : 登録対象の NFACit
+*/
+void Regex::addBuffer( vector<NFACit>& vecBuffer, NFACit nfa )
+{
+  for ( vector<NFACit>::iterator it = vecBuffer.begin() ;
+        it != vecBuffer.end() ; ++it )
+    if ( *it == nfa ) return;
+
+  vecBuffer.push_back( nfa );
+}
+
+
+/*
+  Regex::regex : 文字列の先頭ポインタを後ろにずらしながら
+                 パターン照合ルーチンを呼び出す
+
+  StrCit& s : 照合開始位置
+  StrCit& e : 照合終了位置の次
+
+  戻り値 : 一致したか (一致文字列が NULL の場合は false となる)
+*/
+bool Regex::regex( StrCit& s, StrCit& e ) const
+{
+  for ( ; s < e ; ++s ) {
+    StrCit matched = regexSub( s, e );
+    if ( matched != s ) {
+      // 行末で終わっているか?
+      if ( ( ! endFlg_ ) || matched == e ) {
+        e = matched;
+        return( true );
+      }
+    }
+    // 行頭を示すメタキャラクタがあった場合は一度だけ処理
+    if ( startFlg_ ) return( false );
+  }
+
+  return( false );
+}
+
+/*
+  Regex::regex : パターン照合ルーチン
+
+  const string& str : 照合する文字列
+  StrCit& s, e : 一致範囲 ( e は末尾の次の位置 )
+
+  戻り値 : 一致したか (一致文字列が NULL の場合は false となる)
+*/
+bool Regex::regex( const string& str, StrCit& s, StrCit& e ) const
+{
+  if ( str.size() == 0 ) return( false );
+
+  s = str.begin();
+  e = str.end();
+
+  return( regex( s, e ) );
+}
+
+
+int main(){
+  Regex string1;
+  //char a[50],b[50];
+  std::string a(""), b("");
+  string::const_iterator s,e;
+  cout << "input string" << endl;
+  cin >> a;
+  cout << "input regex" << endl;
+  cin >> b;
+  cout << "\nregex:" << b << endl;
+  string1.compile(b);
+  string1.print();
+  if(string1.regex(a,s,e)) cout << "matching!!!\n";
+  else cout << "false\n";
+
+    return 0;
+}
