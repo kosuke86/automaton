@@ -1,1 +1,2 @@
-string matching engine(NFA, DFA, ε-transitions NFA)
+# Regular Expression Engine
+# convert to NFA, DFA and ε-transitions NFA
