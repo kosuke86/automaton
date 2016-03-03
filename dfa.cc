@@ -1170,8 +1170,10 @@ int main(){
   string::const_iterator s,e;
   File >> a;
   cout << "input string" << endl;
+  //cout << " " <<  a << endl;
   cout << "input regex" << endl;
   cin >> b;
+  //b="(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a";
   cout << "\nregex:" << b << endl;
   gettimeofday(&tv, NULL);
   reg.compile(b);
@@ -1179,8 +1181,8 @@ int main(){
   gettimeofday(&tz, NULL);
   if(reg.DFA_regex(a,s,e) == 1){
     cout << "matching!!!(DFA)\n";
-    }else{
-       cout << "false(DFA)\n";
+  }else{
+    cout << "false(DFA)\n";
   }
   printf("time = %f秒\n",(tz.tv_sec - tv.tv_sec)+(tz.tv_usec - tv.tv_usec)*1.0E-6);
   printf("matching time = %f秒\n",(tz1.tv_sec - tv1.tv_sec)+(tz1.tv_usec - tv1.tv_usec)*1.0E-6);
