@@ -1,2 +1,2 @@
 # Regular Expression Engine
-convert to NFA, DFA and ε-transitions NFA
+Convert to NFA, DFA and ε-transitions NFA
