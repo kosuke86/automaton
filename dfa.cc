@@ -1170,7 +1170,6 @@ int main(){
   string::const_iterator s,e;
   File >> a;
   cout << "input string" << endl;
-  //cout << " " <<  a << endl;
   cout << "input regex" << endl;
   cin >> b;
   //b="(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a(a|b)*a";
