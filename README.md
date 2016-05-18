@@ -1,2 +1,4 @@
-# Regular Expression Engine
-Convert to NFA, DFA and ε-transitions NFA
+# 正規表現エンジン
+正規表現と文字列を入力するとオートマトンが生成される。
+種類は3種類(NFA,DFA,ε遷移を含むNFA)
+それぞれスループットと使用メモリ量が異なる。
